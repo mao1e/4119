@@ -11,6 +11,7 @@ serverSocket.bind(('' , int(sys.argv[1])))
 
 serverSocket.listen(1)
 
+#keep connecting to new client and server when they are disconnected
 while 1==1:
 
   connectionSocket, addr = serverSocket.accept()
@@ -28,7 +29,7 @@ while 1==1:
   # Connect to the server's listening socket
   clientSocket.connect((serverName, serverPort))
 
-
+  #keep allowing client and server to send messages to each other
   while 1==1:
       
       # Recieving message from client
