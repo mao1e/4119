@@ -6,78 +6,90 @@ import sys
 
 serverSocket = socket(AF_INET, SOCK_STREAM)
 
+#accept from any address but only listen-port
 serverSocket.bind(('' , int(sys.argv[1])))
 
 serverSocket.listen(1)
-# accepted the client connection now connect to the server
-
-
-
-#THIS IS WHERE YOU CONNECT TO THE SERVER AND STAY CONNECTED
-clientSocket = socket(AF_INET, SOCK_STREAM)
-clientSocket.bind((sys.argv[2], 0))
-serverName = sys.argv[3]
-serverPort = 8080
-# Connect to the server's listening socket
-clientSocket.connect((serverName, serverPort))
-
-
 
 while 1==1:
 
   connectionSocket, addr = serverSocket.accept()
 
   print("accepted from ", addr)
+  #THIS IS WHERE YOU CONNECT TO THE SERVER
+  clientSocket = socket(AF_INET, SOCK_STREAM)
 
-  # Recieving message from client
-  encodedClientMessage = connectionSocket.recv(2048)
-  if not encodedClientMessage:
-      connectionSocket.close()
-      continue
+  #bind to fake-ip, port 0 (any available)
+  clientSocket.bind((sys.argv[2], 0))
+  
+  #server address is server-ip and port is fixed 8080
+  serverName = sys.argv[3]
+  serverPort = 8080
+  # Connect to the server's listening socket
+  clientSocket.connect((serverName, serverPort))
 
-  # Decode the recieved binary message into a string
-  decodedClientMessage = encodedClientMessage.decode()
-  while(decodedClientMessage[-1] != '\n'):
-      encodednextmsg = connectionSocket.recv(2048)
-      if not encodednextmsg:
+
+  while 1==1:
+      
+      # Recieving message from client
+      encodedClientMessage = connectionSocket.recv(2048)
+      if not encodedClientMessage:
           break
-      decodednextmsg = encodednextmsg.decode()
-      decodedClientMessage += decodednextmsg
 
-  print("Received Message from Client: ", decodedClientMessage)
+      # Decode the recieved binary message into a string
+      decodedClientMessage = encodedClientMessage.decode()
+      
+      #keep recv if not reached EOM \n
+      while(len(decodedClientMessage) > 0 and 
+              decodedClientMessage[-1] != '\n'):
+          encodednextmsg = connectionSocket.recv(2048)
+          if not encodednextmsg:
+              break
+          decodednextmsg = encodednextmsg.decode()
+          decodedClientMessage += decodednextmsg
 
-  message = decodedClientMessage
-  print("Sending Message to Server: ", message)
+      print("Received Message from Client: ", decodedClientMessage)
 
-  # Encode the message into binary
-  encodedMessage = message.encode()
+      message = decodedClientMessage
+      print("Sending Message to Server: ", message)
 
-  # Send the encoded message to the server
-  clientSocket.send(encodedMessage)
+      # Encode the message into binary
+      encodedMessage = message.encode()
 
-  # Receive the modified message back from the server
-  encodedServerMessage = clientSocket.recv(2048)
-  # Decode the modified message back into a string
-  decodedServerMessage = encodedServerMessage.decode()
-  while(len(decodedServerMessage) > 0 and decodedServerMessage[-1] != '\n'):
-      encodednextmsg = clientSocket.recv(2048)
-      if not encodednextmsg:
-          break
-      decodednextmsg = encodednextmsg.decode()
-      decodedServerMessage += decodednextmsg
-  print("Received Message from Server: ", decodedServerMessage)
+      # Send the encoded message to the server
+      clientSocket.send(encodedMessage)
+
+      # Receive the modified message back from the server
+      encodedServerMessage = clientSocket.recv(2048)
+      
+      #stop the conversation if server disconnects
+      if not encodedServerMessage:
+        break
+
+      # Decode the modified message back into a string
+      decodedServerMessage = encodedServerMessage.decode()
+      
+      #keep recv if not EOM is not \n
+      while(len(decodedServerMessage) > 0 and 
+              decodedServerMessage[-1] != '\n'):
+          encodednextmsg = clientSocket.recv(2048)
+          if not encodednextmsg:
+              break
+          decodednextmsg = encodednextmsg.decode()
+          decodedServerMessage += decodednextmsg
+      print("Received Message from Server: ", decodedServerMessage)
 
 
- 
-  print("Sending Message to Client: ", decodedServerMessage)
+     
+      print("Sending Message to Client: ", decodedServerMessage)
 
-  # Encode the modified message back into binary
-  encodeddecodedServerMessage = decodedServerMessage.encode()
+      # Encode the modified message back into binary
+      encodeddecodedServerMessage = decodedServerMessage.encode()
 
-  # Sending the encoded modified message back to the client
-  connectionSocket.send(encodeddecodedServerMessage)
+      # Sending the encoded modified message back to the client
+      connectionSocket.send(encodeddecodedServerMessage)
 
   connectionSocket.close()
+  clientSocket.close()
 
-clientSocket.close()
 serverSocket.close()
