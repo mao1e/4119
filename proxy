@@ -26,7 +26,7 @@ while 1==1:
   #bind to fake-ip, port 0 (any available)
   clientSocket.bind((sys.argv[3], 0))
 
-  #server address is server-ip and port is fixed 8080
+  #server address is server-ip and port is fixed 80
   serverName = sys.argv[4]
   serverPort = 80
   # Connect to the server's listening socket
@@ -34,8 +34,9 @@ while 1==1:
 
   #keep allowing client and server to send messages to each other
   while 1==1:
+      writestr = str(time.time())
 
-      encodedClientMessage = connectionSocket.recv(2048)
+      encodedClientMessage = connectionSocket.recv(8192)
       if not encodedClientMessage:
           break
 
@@ -45,25 +46,25 @@ while 1==1:
       #keep recv if not reached EOM \n
       while(len(decodedClientMessage) > 0 and 
               decodedClientMessage[-4:] != '\r\n\r\n'):
-          encodednextmsg = connectionSocket.recv(2048)
+          encodednextmsg = connectionSocket.recv(8192)
           if not encodednextmsg:
               break
           decodednextmsg = encodednextmsg.decode()
           decodedClientMessage += decodednextmsg
 
-      print("Received Message from Client: ", decodedClientMessage)
+      print("Received Message from Client: ", len(decodedClientMessage))
 
       message = decodedClientMessage
-      print("Sending Message to Server: ", message)
+      print("Sending Message to Server: ", len(message))
 
       # Encode the message into binary
       encodedMessage = message.encode()
 
       # Send the encoded message to the server
       clientSocket.send(encodedMessage)
-
+      firsttime = time.time()
       # Receive the modified message back from the server
-      encodedServerMessage = clientSocket.recv(2048)
+      encodedServerMessage = clientSocket.recv(8192)
 
       #stop the conversation if server disconnects
       if not encodedServerMessage:
@@ -75,27 +76,34 @@ while 1==1:
       #keep recv if not EOM is not \n
       while(len(decodedServerMessage) > 0 and 
               "\r\n\r\n" not in decodedServerMessage):
-          encodednextmsg = clientSocket.recv(2048)
+          encodednextmsg = clientSocket.recv(8192)
           if not encodednextmsg:
               break
           decodednextmsg = encodednextmsg.decode()
           decodedServerMessage += decodednextmsg
-      print("Received Message from Server: ", decodedServerMessage)
+      secondtime = time.time()
+      writestr += " " + str(secondtime - firsttime) + " " + str(sys.argv[4])
+
+      print("Received Message from Server: ", len(decodedServerMessage))
       index = decodedServerMessage.find("\r\n\r\n")
       responseheaders = decodedServerMessage[:index]
       headers = responseheaders.split("\r\n")
       clength = 0
       for header in headers:
           if "Content-Length: " in header:
-              clength = int(header[17:])
-      responsebody = decodedServerMessage[index + 5:]
+              clength = int(header[16:])
+      responsebody = decodedServerMessage[index:]
+
       if len(responsebody) < clength:
           encodednextmsg = clientSocket.recv(clength - len(responsebody))
           if not encodednextmsg:
               break
           decodednextmsg = encodednextmsg.decode()
           responsebody += decodednextmsg
-      decodedServerMessage = responsebody
+      writestr += " " + str(clength)
+      file.write(writestr)
+      file.flush()
+      decodedServerMessage = responseheaders + responsebody
       print("Sending Message to Client: ", len(decodedServerMessage))
 
       # Encode the modified message back into binary
