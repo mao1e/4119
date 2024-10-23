@@ -36,22 +36,29 @@ while 1==1:
   while 1==1:
       writestr = str(time.time())
 
-      encodedClientMessage = connectionSocket.recv(8192)
+      encodedClientMessage = connectionSocket.recv(2048)
       if not encodedClientMessage:
           break
 
       # Decode the recieved binary message into a string
-      decodedClientMessage = encodedClientMessage.decode()
+      decodedClientMessage = encodedClientMessage.decode('iso-8859-1')
       
       #keep recv if not reached EOM \n
       while(len(decodedClientMessage) > 0 and 
               decodedClientMessage[-4:] != '\r\n\r\n'):
-          encodednextmsg = connectionSocket.recv(8192)
+          print("loop")
+          encodednextmsg = connectionSocket.recv(2048)
           if not encodednextmsg:
               break
           decodednextmsg = encodednextmsg.decode()
           decodedClientMessage += decodednextmsg
-
+          
+      headers = decodedClientMessage.split("\n")
+      filename = ""
+      for header in headers:
+          if "GET" in header:
+              firstline = header.split(" ")
+              filename = firstline[1]
       print("Received Message from Client: ", len(decodedClientMessage))
 
       message = decodedClientMessage
@@ -64,7 +71,7 @@ while 1==1:
       clientSocket.send(encodedMessage)
       firsttime = time.time()
       # Receive the modified message back from the server
-      encodedServerMessage = clientSocket.recv(8192)
+      encodedServerMessage = clientSocket.recv(1)
 
       #stop the conversation if server disconnects
       if not encodedServerMessage:
@@ -72,46 +79,43 @@ while 1==1:
 
       # Decode the modified message back into a string
       decodedServerMessage = encodedServerMessage.decode('iso-8859-1')
-
       #keep recv if not EOM is not \n
       while(len(decodedServerMessage) > 0 and 
-              "\r\n\r\n" not in decodedServerMessage):
-          encodednextmsg = clientSocket.recv(8192)
+               "\r\n\r\n" not in decodedServerMessage):
+          encodednextmsg = clientSocket.recv(1)
+          encodedServerMessage += encodednextmsg
           if not encodednextmsg:
               break
           decodednextmsg = encodednextmsg.decode()
           decodedServerMessage += decodednextmsg
-      secondtime = time.time()
-      writestr += " " + str(secondtime - firsttime) + " " + str(sys.argv[4])
-
       print("Received Message from Server: ", len(decodedServerMessage))
       index = decodedServerMessage.find("\r\n\r\n")
-      responseheaders = decodedServerMessage[:index]
-      headers = responseheaders.split("\r\n")
+      responseheaders = decodedServerMessage
+      headers = responseheaders.split("\n")
       clength = 0
       for header in headers:
-          if "Content-Length: " in header:
+           if "Content-Length: " in header:
               clength = int(header[16:])
-      responsebody = decodedServerMessage[index:]
+      
+      connectionSocket.send(encodedServerMessage)
 
-      if len(responsebody) < clength:
-          encodednextmsg = clientSocket.recv(clength - len(responsebody))
-          if not encodednextmsg:
+      print("Sending Message to Client: ", len(encodedServerMessage))
+      # Sending the encoded modified message back to the client
+      totalsent = 0
+      while(totalsent < clength):
+          recieved_chunk = clientSocket.recv(2048)
+          if not recieved_chunk:
               break
-          decodednextmsg = encodednextmsg.decode()
-          responsebody += decodednextmsg
-      writestr += " " + str(clength)
+          connectionSocket.send(recieved_chunk)
+          totalsent += 2048
+      secondtime = time.time() 
+      writestr += " " + str(secondtime - firsttime) + " " + str(sys.argv[4])
+      
+
+      writestr += " " + filename + " " + str(clength) + "\n"
       file.write(writestr)
       file.flush()
-      decodedServerMessage = responseheaders + responsebody
-      print("Sending Message to Client: ", len(decodedServerMessage))
-
-      # Encode the modified message back into binary
-      encodeddecodedServerMessage = decodedServerMessage.encode()
-
-      # Sending the encoded modified message back to the client
-      connectionSocket.send(encodeddecodedServerMessage)
-
+      
   connectionSocket.close()
   clientSocket.close()
 
