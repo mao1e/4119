@@ -3,22 +3,9 @@
 from socket import *
 import time
 import sys
+import threading
 
-serverSocket = socket(AF_INET, SOCK_STREAM)
-
-#accept from any address but only listen-port
-serverSocket.bind(('' , int(sys.argv[2])))
-
-serverSocket.listen(1)
-
-#open file
-file = open(sys.argv[1], "w")
-
-
-#keep connecting to new client and server when they are disconnected
-while 1==1:
-
-  connectionSocket, addr = serverSocket.accept()
+def thread_func(connectionSocket, addr, file):
   print("accepted from ", addr)
   #THIS IS WHERE YOU CONNECT TO THE SERVER
   clientSocket = socket(AF_INET, SOCK_STREAM)
@@ -115,9 +102,30 @@ while 1==1:
       writestr += " " + filename + " " + str(clength) + "\n"
       file.write(writestr)
       file.flush()
-      
-  connectionSocket.close()
+ 
   clientSocket.close()
+  connectionSocket.close()
 
+serverSocket = socket(AF_INET, SOCK_STREAM)
+
+#accept from any address but only listen-port
+serverSocket.bind(('' , int(sys.argv[2])))
+
+serverSocket.listen(1)
+
+#open file
+file = open(sys.argv[1], "w")
+threads = []
+
+#keep connecting to new client and server when they are disconnected
+while 1==1:
+  connectionSocket, addr = serverSocket.accept()
+  
+  t = threading.Thread(target = thread_func, args = (connectionSocket, addr, file))
+  t.start()
+  threads.append(t)
+
+for t in threads:
+    t.join()
 serverSocket.close()
 file.close()
