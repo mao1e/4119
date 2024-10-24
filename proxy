@@ -89,13 +89,16 @@ def thread_func(connectionSocket, addr, file):
       print("Sending Message to Client: ", len(encodedServerMessage))
       # Sending the encoded modified message back to the client
       totalsent = 0
+      all_chunks = []
       while(totalsent < clength):
           recieved_chunk = clientSocket.recv(2048)
           if not recieved_chunk:
               break
-          connectionSocket.send(recieved_chunk)
+          all_chunks.append(recieved_chunk)
           totalsent += 2048
       secondtime = time.time() 
+      for chunk in all_chunks:
+          connectionSocket.send(chunk)
       writestr += " " + str(secondtime - firsttime) + " " + str(sys.argv[4])
       
 
