@@ -3,43 +3,71 @@
 from socket import *
 import time
 import sys
+import re
 import threading
 
-def thread_func(connectionSocket, addr, file):
+def thread_func(connectionSocket, addr, file, alpha):
   print("accepted from ", addr)
   #THIS IS WHERE YOU CONNECT TO THE SERVER
   clientSocket = socket(AF_INET, SOCK_STREAM)
 
   #bind to fake-ip, port 0 (any available)
-  clientSocket.bind((sys.argv[3], 0))
+  clientSocket.bind((sys.argv[5], 0))
 
   #server address is server-ip and port is fixed 80
-  serverName = sys.argv[4]
+  serverName = '127.0.0.1' #this will be changed later
   serverPort = 80
   # Connect to the server's listening socket
   clientSocket.connect((serverName, serverPort))
-
-  #keep allowing client and server to send messages to each other
-  while 1==1:
-      writestr = str(time.time())
-
-      encodedClientMessage = connectionSocket.recv(2048)
+  tput_curr = 0
+  def receive_client_msg(socket_to_use):
+      encodedClientMessage = socket_to_use.recv(2048)
       if not encodedClientMessage:
-          break
+          return encodedClientMessage
 
       # Decode the recieved binary message into a string
       decodedClientMessage = encodedClientMessage.decode('iso-8859-1')
-      
+
       #keep recv if not reached EOM \n
-      while(len(decodedClientMessage) > 0 and 
+      while(len(decodedClientMessage) > 0 and
               decodedClientMessage[-4:] != '\r\n\r\n'):
           print("loop")
-          encodednextmsg = connectionSocket.recv(2048)
+          encodednextmsg = socket_to_use.recv(2048)
           if not encodednextmsg:
               break
           decodednextmsg = encodednextmsg.decode()
           decodedClientMessage += decodednextmsg
-          
+      return decodedClientMessage
+  bitrates = []
+  #keep allowing client and server to send messages to each other
+  while 1==1:
+      tput_new = 0
+      writestr = str(time.time())
+      curr_bitrate = 0
+
+      decodedClientMessage = receive_client_msg(connectionSocket)
+      if not decodedClientMessage:
+          break
+      if (len(bitrates) == 0 and re.search(r'BigBuckBunny_6s_nolist\.mpd', decodedClientMessage)):
+          print('replaced no list')
+          decodedClientMessage = re.sub(r'BigBuckBunny_6s_nolist\.mpd', 'BigBuckBunny_6s.mpd', decodedClientMessage)
+      elif (re.search(r'bunny_(\d+)bps', decodedClientMessage)):
+          print('no list done, fetch bitrate')
+          print(bitrates)
+          curr_bitrate = bitrates[0]
+          for bitrate, index in enumerate(bitrates):
+              if bitrate * 1.5 > tput_curr:
+                  curr_bitrate = bitrates[index - 1]
+                  break
+              if index == len(bitrates) - 1:
+                  curr_bitrate = bitrate
+          print('replacing bitrate')
+          bitrate_pattern = r'bunny_(\d+)bps'
+          decodedClientMessage = re.sub(
+            bitrate_pattern,
+            f'bunny_{curr_bitrate}bps',
+            decodedClientMessage
+          )
       headers = decodedClientMessage.split("\n")
       filename = ""
       for header in headers:
@@ -57,6 +85,20 @@ def thread_func(connectionSocket, addr, file):
       # Send the encoded message to the server
       clientSocket.send(encodedMessage)
       firsttime = time.time()
+
+      if ((len(bitrates) == 0 and re.search(r'BigBuckBunny_6s', decodedClientMessage))):
+          decodedServerMessage = receive_client_msg(clientSocket)
+          if not decodedServerMessage:
+              break
+          bitrate_pattern = r'bandwidth="(\d+)"'
+          found_bitrates = [int(match.group(1)) for match in re.finditer(bitrate_pattern, decodedServerMessage)]
+          bitrates = found_bitrates
+          tput_curr = min(bitrates)
+          bitrates.sort()
+          print('getting bitrates from xml below this line')
+          print(bitrates)
+          connectionSocket.send(decodedServerMessage.encode())
+          continue
       # Receive the modified message back from the server
       encodedServerMessage = clientSocket.recv(1)
 
@@ -100,7 +142,8 @@ def thread_func(connectionSocket, addr, file):
       for chunk in all_chunks:
           connectionSocket.send(chunk)
       writestr += " " + str(secondtime - firsttime) + " " + str(sys.argv[4])
-      
+      tput_new = clength / (secondtime - firsttime)
+      tput_curr = alpha * tput_new + (1 - alpha) * tput_curr
 
       writestr += " " + filename + " " + str(clength) + "\n"
       file.write(writestr)
@@ -109,22 +152,27 @@ def thread_func(connectionSocket, addr, file):
   clientSocket.close()
   connectionSocket.close()
 
+
+
+
+
+
 serverSocket = socket(AF_INET, SOCK_STREAM)
 
 #accept from any address but only listen-port
-serverSocket.bind(('' , int(sys.argv[2])))
+serverSocket.bind(('' , int(sys.argv[4])))
 
 serverSocket.listen(1)
 
 #open file
-file = open(sys.argv[1], "w")
+file = open(sys.argv[2], "w")
 threads = []
 
 #keep connecting to new client and server when they are disconnected
 while 1==1:
   connectionSocket, addr = serverSocket.accept()
-  
-  t = threading.Thread(target = thread_func, args = (connectionSocket, addr, file))
+  alpha = float(sys.argv[3])
+  t = threading.Thread(target = thread_func, args = (connectionSocket, addr, file, alpha))
   t.start()
   threads.append(t)
 
