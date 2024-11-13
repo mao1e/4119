@@ -135,6 +135,7 @@ def thread_func(connectionSocket, addr, file, alpha):
       while(totalsent < clength):
           recieved_chunk = clientSocket.recv(2048)
           if not recieved_chunk:
+              print('i broke')
               break
           all_chunks.append(recieved_chunk)
           totalsent += 2048
