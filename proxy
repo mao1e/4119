@@ -7,7 +7,6 @@ import re
 import threading
 import struct
 
-# Global variables
 bitrates = []
 
 def parse_dns_file(dns_filename):
@@ -22,206 +21,226 @@ def create_dns_query(domain):
     ques += struct.pack('!HH', 1, 1)
     return ques
 
-def send_dns_request(dns_ip, dns_port, query):
-    """Send DNS request and return the response."""
-    dnssock = socket(AF_INET, SOCK_DGRAM)
-    dnssock.sendto(query, (dns_ip, dns_port))
-    response, _ = dnssock.recvfrom(512)  # Buffer size is 512 bytes
-    dnssock.close()
-    return response
-
-def parse_dns_response(response):
-    """Parse DNS response and return the IP address."""
-    header = struct.unpack('!HHHHHH', response[:12])
-    ancount = header[3]  # Number of answers
-    if ancount == 0:
-        return None
-    qname_end = response.index(b'\x00', 12) + 5
-    answer = response[qname_end:]
-    rdlength = struct.unpack('!H', answer[10:12])[0]
-    return inet_ntoa(answer[12:12 + rdlength])
-
-def receive_client_msg(socket_to_use):
-    """Receive message from client or server."""
-    encoded_message = socket_to_use.recv(2048)
-    if not encoded_message:
-        return encoded_message, None
-    decoded_message = encoded_message.decode('iso-8859-1')
-    while len(decoded_message) > 0 and decoded_message[-4:] != '\r\n\r\n':
-        print("loop")
-        encoded_next_msg = socket_to_use.recv(2048)
-        if not encoded_next_msg:
-            break
-        encoded_message += encoded_next_msg
-        decoded_message += encoded_next_msg.decode()
-    return decoded_message, encoded_message
-
-def process_client_message(decoded_message, tput_curr):
-    """Process client message and update bitrates if necessary."""
-    global bitrates
-    curr_bitrate = 0
-    if len(bitrates) == 0 and re.search(r'BigBuckBunny_6s_nolist\.mpd', decoded_message):
-        print('replaced no list')
-        decoded_message = re.sub(r'BigBuckBunny_6s_nolist\.mpd', 'BigBuckBunny_6s.mpd', decoded_message)
-    elif len(bitrates) != 0 and re.search(r'bunny_(\d+)bps', decoded_message):
-        print('no list done, fetch bitrate')
-        print(bitrates)
-        curr_bitrate = bitrates[0]
-        for index, bitrate in enumerate(bitrates):
-            if bitrate * 1.5 > tput_curr and index > 0:
-                curr_bitrate = bitrates[index - 1]
-                break
-            if index == len(bitrates) - 1:
-                curr_bitrate = bitrate
-        print('replacing bitrate')
-        bitrate_pattern = r'bunny_(\d+)bps'
-        decoded_message = re.sub(bitrate_pattern, f'bunny_{curr_bitrate}bps', decoded_message)
-    return decoded_message, curr_bitrate
-
-def extract_filename(decoded_message):
-    """Extract filename from client message."""
-    headers = decoded_message.split("\n")
-    for header in headers:
-        if "GET" in header:
-            return header.split(" ")[1]
-    return ""
-
-def update_bitrates(decoded_server_message):
-    """Update bitrates from server response."""
-    global bitrates
-    bitrate_pattern = r'bandwidth="(\d+)"'
-    found_bitrates = [int(match.group(1)) for match in re.finditer(bitrate_pattern, decoded_server_message)]
-    bitrates = sorted(found_bitrates)
-    print('getting bitrates from xml below this line')
-    print(bitrates)
-    return min(bitrates)
-
-def handle_server_response(client_socket, connection_socket, decoded_server_message):
-    """Handle server response and send to client."""
-    index = decoded_server_message.find("\r\n\r\n")
-    response_headers = decoded_server_message
-    headers = response_headers.split("\n")
-    content_length = 0
-    for header in headers:
-        if "Content-Length: " in header:
-            content_length = int(header[16:])
-    connection_socket.send(decoded_server_message.encode())
-    print("Sending Message to Client: ", len(decoded_server_message))
-    total_sent = 0
-    all_chunks = []
-    while total_sent < content_length:
-        received_chunk = client_socket.recv(2048)
-        if not received_chunk:
-            print('i broke')
-            break
-        all_chunks.append(received_chunk)
-        total_sent += 2048
-    for chunk in all_chunks:
-        connection_socket.send(chunk)
-    return content_length, time.time()
-
-def update_throughput(tput_curr, tput_new, alpha):
-    """Update throughput calculation."""
-    return alpha * tput_new + (1 - alpha) * tput_curr
-
-def write_log(file, start_time, end_time, tput_new, tput_curr, curr_bitrate, server_name, filename):
-    """Write log entry."""
-    log_entry = f"{start_time} {end_time - start_time} {round(tput_new / 1000)} {round(tput_curr / 1000)} {round(curr_bitrate / 1000)} {server_name} {filename}\n"
-    file.write(log_entry)
-    file.flush()
-
-def thread_func(connection_socket, addr, file, alpha):
-    """Main thread function to handle client-server communication."""
+def thread_func(connectionSocket, addr, file, alpha):
     print("accepted from ", addr)
     global bitrates
+    #THIS IS WHERE YOU CONNECT TO THE SERVER
+    client_Socket = socket(AF_INET, SOCK_STREAM)
 
-    # Connect to the server
-    client_socket = socket(AF_INET, SOCK_STREAM)
-    client_socket.bind((sys.argv[5], 0))
+    #bind to fake-ip, port 0 (any available)
+    client_Socket.bind((sys.argv[5], 0))
 
-    # DNS lookup
+    #this is where i parse the dns server ip then query then set server_Name
     tree = sys.argv[1].split('/')
-    dns_filename = sys.argv[1] + "/" + tree[-1] + ".dns"
-    dns_ip = parse_dns_file(dns_filename)
+    dnsfilename = sys.argv[1] + "/" + tree[-1] + ".dns"
+    dns_ip = parse_dns_file(dnsfilename)
     print(dns_ip)
 
+    #make the dns req
     domain = 'video.columbia.edu'
-    dns_query = create_dns_query(domain)
-    dns_response = send_dns_request(dns_ip, int(sys.argv[6]), dns_query)
-    server_ip = parse_dns_response(dns_response)
-    print(server_ip)
+    ques = create_dns_query(domain)
+    dnssock = socket(AF_INET, SOCK_DGRAM)
+    dnssock.sendto(ques, (dns_ip, int(sys.argv[6])))
+    response, _ = dnssock.recvfrom(512)  # Buffer size is 512 bytes
+    dnssock.close()
 
-    server_name = server_ip
-    server_port = 8080
-    client_socket.connect((server_name, server_port))
+    #parse the dns response
+    header = struct.unpack('!HHHHHH', response[:12])
+    ancount = header[3]  # Number of answers
 
+    # Check if there are answers
+    if ancount == 0:
+        return None
+
+# Skip the question section
+    qname_end = response.index(b'\x00',
+                               12) + 5  # +5 for null byte, QTYPE, and QCLASS
+    answer_start = qname_end
+
+    # Parse the answer section
+    answer = response[answer_start:]
+    rdlength = struct.unpack('!H', answer[10:12])[0]
+    ip = inet_ntoa(answer[12:12 + rdlength])
+    print(ip)
+    #server address is server-ip and port is fixed 80
+    server_Name = ip  #this will be changed later
+    serverPort = 8080
+    # Connect to the server's listening socket
+    client_Socket.connect((server_Name, serverPort))
     tput_curr = 0
+
+    def receive_client_msg(socket_to_use):
+        encoded_Client_Message = socket_to_use.recv(2048)
+        if not encoded_Client_Message:
+            return encoded_Client_Message, None
+
+        # Decode the recieved binary message into a string
+        decoded_Client_Message = encoded_Client_Message.decode('iso-8859-1')
+
+        #keep recv if not reached EOM \n
+        while (len(decoded_Client_Message) > 0
+               and decoded_Client_Message[-4:] != '\r\n\r\n'):
+            print("loop")
+            encodednextmsg = socket_to_use.recv(2048)
+            encoded_Client_Message += encodednextmsg
+            if not encodednextmsg:
+                break
+            decodednextmsg = encodednextmsg.decode()
+            decoded_Client_Message += decodednextmsg
+        return decoded_Client_Message, encoded_Client_Message
+
 
     while True:
         tput_new = 0
-        start_time = time.time()
+        writestr = str(time.time())
         curr_bitrate = 0
 
-        decoded_client_message, encoded_client_message = receive_client_msg(connection_socket)
-        if not decoded_client_message:
+        decoded_Client_Message, encoded_Client_Message = receive_client_msg(
+            connectionSocket)
+        if not decoded_Client_Message:
             break
+        cleanclientmsg = encoded_Client_Message
+        if (len(bitrates) == 0 and re.search(r'BigBuckBunny_6s_nolist\.mpd',
+                                             decoded_Client_Message)):
+            print('replaced no list')
+            decoded_Client_Message = re.sub(r'BigBuckBunny_6s_nolist\.mpd',
+                                          'BigBuckBunny_6s.mpd',
+                                          decoded_Client_Message)
+        elif (len(bitrates) != 0
+              and re.search(r'bunny_(\d+)bps', decoded_Client_Message)):
+            print('no list done, fetch bitrate')
+            print(bitrates)
+            curr_bitrate = bitrates[0]
+            for index, bitrate in enumerate(bitrates):
+                if bitrate * 1.5 > tput_curr and index > 0:
+                    curr_bitrate = bitrates[index - 1]
+                    break
+                if index == len(bitrates) - 1:
+                    curr_bitrate = bitrate
+            print('replacing bitrate')
+            bitrate_pattern = r'bunny_(\d+)bps'
+            decoded_Client_Message = re.sub(bitrate_pattern,
+                                          f'bunny_{curr_bitrate}bps',
+                                          decoded_Client_Message)
+        headers = decoded_Client_Message.split("\n")
+        filename = ""
+        for header in headers:
+            if "GET" in header:
+                firstline = header.split(" ")
+                filename = firstline[1]
+        print("Received Message from Client: ", len(decoded_Client_Message))
 
-        clean_client_msg = encoded_client_message
-        decoded_client_message, curr_bitrate = process_client_message(decoded_client_message, tput_curr)
+        message = decoded_Client_Message
+        print("Sending Message to Server: ", len(message))
 
-        filename = extract_filename(decoded_client_message)
+        # Encode the message into binary
+        encodedMessage = message.encode()
 
-        print("Received Message from Client: ", len(decoded_client_message))
-        print("Sending Message to Server: ", len(decoded_client_message))
+        # Send the encoded message to the server
+        client_Socket.send(encodedMessage)
+        firsttime = time.time()
 
-        client_socket.send(decoded_client_message.encode())
-
-        if len(bitrates) == 0 and re.search(r'BigBuckBunny_6s', decoded_client_message):
-            decoded_server_message, encoded_server_message = receive_client_msg(client_socket)
-            if not decoded_server_message:
+        if ((len(bitrates) == 0
+             and re.search(r'BigBuckBunny_6s', decoded_Client_Message))):
+            decodedServerMessage, encodedServerMessage = receive_client_msg(
+                client_Socket)
+            if not decodedServerMessage:
                 break
-            tput_curr = update_bitrates(decoded_server_message)
-            connection_socket.send(encoded_server_message)
+            bitrate_pattern = r'bandwidth="(\d+)"'
+            found_bitrates = [
+                int(match.group(1))
+                for match in re.finditer(bitrate_pattern, decodedServerMessage)
+            ]
+            bitrates = found_bitrates
+            tput_curr = min(bitrates)
+            bitrates.sort()
+            print('getting bitrates from xml below this line')
+            print(bitrates)
+            #client_Socket.send(cleanclientmsg)
+            #decodedServerMessage, encodedServerMessage = receive_client_msg(client_Socket)
+            connectionSocket.send(encodedServerMessage)
             continue
+        # Receive the modified message back from the server
+        encodedServerMessage = client_Socket.recv(1)
 
-        decoded_server_message, encoded_server_message = receive_client_msg(client_socket)
-        if not decoded_server_message:
+        #stop the conversation if server disconnects
+        if not encodedServerMessage:
             break
 
-        content_length, end_time = handle_server_response(client_socket, connection_socket, decoded_server_message)
+        # Decode the modified message back into a string
+        decodedServerMessage = encodedServerMessage.decode('iso-8859-1')
+        #keep recv if not EOM is not \n
+        while (len(decodedServerMessage) > 0
+               and "\r\n\r\n" not in decodedServerMessage):
+            encodednextmsg = client_Socket.recv(1)
+            encodedServerMessage += encodednextmsg
+            if not encodednextmsg:
+                break
+            decodednextmsg = encodednextmsg.decode()
+            decodedServerMessage += decodednextmsg
+        print("Received Message from Server: ", len(decodedServerMessage))
+        #"""Handle server response and send to client."""
+        index = decodedServerMessage.find("\r\n\r\n")
+        responseheaders = decodedServerMessage
+        headers = responseheaders.split("\n")
+        clength = 0
+        for header in headers:
+            if "Content-Length: " in header:
+                clength = int(header[16:])
 
-        if filename == "/":
+        connectionSocket.send(encodedServerMessage)
+
+        print("Sending Message to Client: ", len(encodedServerMessage))
+        # Sending the encoded modified message back to the client
+        totalsent = 0
+        all_chunks = []
+        while totalsent < clength:
+            recieved_chunk = client_Socket.recv(2048)
+            if not recieved_chunk:
+                print('i broke')
+                break
+            all_chunks.append(recieved_chunk)
+            totalsent += 2048
+        secondtime = time.time()
+        for chunk in all_chunks:
+            connectionSocket.send(chunk)
+        if filename == "/" or filename == '/favicon.io':
             continue
+        writestr += " " + str(secondtime - firsttime) + " "
+        tput_new = clength / (secondtime - firsttime)
+        tput_curr = alpha * tput_new + (1 - alpha) * tput_curr
 
-        tput_new = content_length / (end_time - start_time)
-        tput_curr = update_throughput(tput_curr, tput_new, alpha)
+        writestr += str(round(tput_new / 1000)) + " " + str(
+            round(tput_curr / 1000)) + " " + str(
+                round(curr_bitrate /
+                      1000)) + " " + server_Name + " " + filename + "\n"
+        file.write(writestr)
+        file.flush()
 
-        write_log(file, start_time, end_time, tput_new, tput_curr, curr_bitrate, server_name, filename)
+    client_Socket.close()
+    connectionSocket.close()
 
-    client_socket.close()
-    connection_socket.close()
+serverSocket = socket(AF_INET, SOCK_STREAM)
 
-def main():
-    """Main function to set up server and handle client connections."""
-    server_socket = socket(AF_INET, SOCK_STREAM)
-    server_socket.bind(('', int(sys.argv[4])))
-    server_socket.listen(1)
+#accept from any address but only listen-port
+serverSocket.bind(('', int(sys.argv[4])))
 
-    log_file = open(sys.argv[2], "w", encoding="utf-8")
-    threads = []
+serverSocket.listen(1)
 
-    while True:
-        connection_socket, addr = server_socket.accept()
-        alpha = float(sys.argv[3])
-        t = threading.Thread(target=thread_func, args=(connection_socket, addr, log_file, alpha))
-        t.start()
-        threads.append(t)
+#open file
+file = open(sys.argv[2], "w", encoding="utf-8")
+threads = []
 
-    for t in threads:
-        t.join()
+#keep connecting to new client and server when they are disconnected
+while True:
+    connectionSocket, addr = serverSocket.accept()
+    alpha = float(sys.argv[3])
+    t = threading.Thread(target=thread_func,
+                         args=(connectionSocket, addr, file, alpha))
+    t.start()
+    threads.append(t)
 
-    server_socket.close()
-    log_file.close()
-
-if __name__ == "__main__":
-    main()
+for t in threads:
+    t.join()
+serverSocket.close()
+file.close()
