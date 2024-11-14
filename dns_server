@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+
+
+from socket import *
+import time
+import sys
+
+serverSocket = socket(AF_INET, SOCK_DGRAM)
+tree = sys.argv[1].split('/')
+dnsfilename = sys.argv[1] + "/" + tree[-1] + ".dns"
+dnsfile = open(dnsfilename, 'r')
+this_ip = dnsfile.read()
+this_ip = this_ip.strip()
+print(this_ip)
+serverSocket.bind((this_ip , int(sys.argv[3])))
+file = open(sys.argv[2], "w")
+dnsserverfilename = sys.argv[1] + "/" + tree[-1] + ".servers"
+dnsserverfile = open(dnsserverfilename, 'r')
+all_ips = []
+for line in dnsserverfile:
+    all_ips.append(line.strip())
+print(all_ips)
+prev = -1
+
+while 1==1:
+    # Recieving message from client
+    encodedClientMessage, clientAddress = serverSocket.recvfrom(2048)
+
+    print(encodedClientMessage)
+    header = struct.unpack('!HHHHHH', data[:12])
+    qname_end = encodedClientMessage.index(b'\x00', 12)
+    qname = data[12:qname_end]
+    names = []
+    i = 0
+    while(i < len(qname)):
+        length = qname[i]
+        names.append(qname[i + 1: i + 1 + length].decode())
+        i += length + 1
+    fullname = '.'.join(names)
+    if not fullname == 'video.columbia.edu':
+        break
+    if (sys.argv[4] == 'round-robin'):
+        server_ip = all_ips[prev % len(all_ips)]
+    elif (sys.argv[4] == 'lowest-latency'):
+        server_ip =
+        latency = []
+        for ip in all_ips:
+            start_time = time.time()
+            output = subprocess.check_output(['dig', '@' + ip, fullname , '+short'], timeout=5)
+            latency.append((time.time() - start_time) * 1000)
+        while(latency[prev % len(all_ips)] != min(latency):
+                prev += 1
+        server_ip = all_ips[prev % len(all_ips)]
+    ans = struct.pack('!HHHHHH', header[0], 0x8180, 1, 1, 0, 0)
+    ans += qname
+
+    prev += 1
+    # Decode the recieved binary message into a string
+    decodedClientMessage = encodedClientMessage.decode()
+
+    print("Received Message from Client: ", decodedClientMessage)
+
+    # Modifying the message
+    modifiedClientMessage = decodedClientMessage.upper()
+
+    print("Sending Message to Client: ", modifiedClientMessage)
+
+    # Encode the modified message back into binary
+    encodedClientModifiedMessage = modifiedClientMessage.encode()
+
+    # Sending the encoded modified message back to the client
+    serverSocket.sendto(encodedClientModifiedMessage, clientAddress)
+    writestr = str(time.time()) +  " request report " + sys.argv[4]
+    file.write(writestr)
+    file.flush()
+serverSocket.close()
+
