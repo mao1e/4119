@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 
-
-from socket import *
-from socket import inet_aton
+from socket import socket, AF_INET, SOCK_DGRAM, inet_aton
 import time
 import sys
 import struct
@@ -11,21 +9,20 @@ import subprocess
 serverSocket = socket(AF_INET, SOCK_DGRAM)
 tree = sys.argv[1].split('/')
 dnsfilename = sys.argv[1] + "/" + tree[-1] + ".dns"
-dnsfile = open(dnsfilename, 'r')
-this_ip = dnsfile.read()
-this_ip = this_ip.strip()
+with open(dnsfilename, 'r', encoding="utf-8") as dnsfile:
+    this_ip = dnsfile.read().strip()
 print(this_ip)
-serverSocket.bind((this_ip , int(sys.argv[3])))
-file = open(sys.argv[2], "w")
+serverSocket.bind((this_ip, int(sys.argv[3])))
+file = open(sys.argv[2], "w", encoding="utf-8")
 dnsserverfilename = sys.argv[1] + "/" + tree[-1] + ".servers"
-dnsserverfile = open(dnsserverfilename, 'r')
 all_ips = []
-for line in dnsserverfile:
-    all_ips.append(line.strip())
+with open(dnsserverfilename, 'r', encoding="utf-8") as dnsserverfile:
+    for line in dnsserverfile:
+        all_ips.append(line.strip())
 print(all_ips)
-prev = -1
+PREV = -1
 
-while 1==1:
+while True:
     # Recieving message from client
     encodedClientMessage, clientAddress = serverSocket.recvfrom(2048)
 
@@ -35,37 +32,37 @@ while 1==1:
     qname = encodedClientMessage[12:qname_end]
     names = []
     i = 0
-    while(i < len(qname)):
+    while i < len(qname):
         length = qname[i]
-        names.append(qname[i + 1: i + 1 + length].decode())
+        names.append(qname[i + 1:i + 1 + length].decode())
         i += length + 1
-    fullname = '.'.join(names)
-    if not fullname == 'video.columbia.edu':
+    FULLNAME = '.'.join(names)
+    if FULLNAME != 'video.columbia.edu':
         response = struct.pack('!HHHHHH', header[0], 0x8403, 1, 0, 0, 0)
-        response += encodedClientMessage[12:qname_end+5]
+        response += encodedClientMessage[12:qname_end + 5]
     else:
-        if (sys.argv[4] == 'round-robin'):
-            server_ip = all_ips[prev % len(all_ips)]
-        elif (sys.argv[4] == 'lowest-latency'):
+        if sys.argv[4] == 'round-robin':
+            server_ip = all_ips[PREV % len(all_ips)]
+        elif sys.argv[4] == 'lowest-latency':
             latency = []
             for ip in all_ips:
                 start_time = time.time()
-                #output = subprocess.check_output(['dig', '@' + ip, fullname , '+short'], timeout=5)
-                
                 subprocess.check_output(['ping', '-c', '1', ip], timeout=1)
                 latency.append((time.time() - start_time) * 1000)
                 last_lat = latency[-1]
                 log_entry = f"{time.time()} measurement-report {ip} {last_lat}\n"
                 file.write(log_entry)
                 file.flush()
-            while latency[prev % len(all_ips)] != min(latency):
-                    prev += 1
-            server_ip = all_ips[prev % len(all_ips)]
+            while latency[PREV % len(all_ips)] != min(latency):
+                PREV += 1
+            server_ip = all_ips[PREV % len(all_ips)]
         response = struct.pack('!HHHHHH', header[0], 0x8400, 1, 1, 0, 0)
-        response += encodedClientMessage[12:qname_end+5]  # Include original question
-        
+        response += encodedClientMessage[12:qname_end +
+                                         5]  # Include original question
+
         # Answer section
-        aname = struct.pack('!H', 0xc00c)  # Pointer to domain name in question section
+        aname = struct.pack(
+            '!H', 0xc00c)  # Pointer to domain name in question section
         atype = struct.pack('!H', 1)  # A record
         aclass = struct.pack('!H', 1)  # IN class
         attl = struct.pack('!I', 0)  # TTL of 0 seconds (no caching)
@@ -77,9 +74,8 @@ while 1==1:
         file.write(writestr)
         file.flush()
 
-        prev += 1
+        PREV += 1
 
-    
     serverSocket.sendto(response, clientAddress)
 serverSocket.close()
 file.close()
