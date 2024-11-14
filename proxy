@@ -5,25 +5,66 @@ import time
 import sys
 import re
 import threading
+import struct
+
+bitrates = []
+
 
 def thread_func(connectionSocket, addr, file, alpha):
   print("accepted from ", addr)
+  global bitrates
   #THIS IS WHERE YOU CONNECT TO THE SERVER
   clientSocket = socket(AF_INET, SOCK_STREAM)
 
   #bind to fake-ip, port 0 (any available)
   clientSocket.bind((sys.argv[5], 0))
 
+  #this is where i parse the dns server ip then query then set ServerName
+  tree = sys.argv[1].split('/')
+  dnsfilename = sys.argv[1] + "/" + tree[-1] + ".dns"
+  dnsfile = open(dnsfilename, 'r')
+  dns_ip = dnsfile.read()
+  dns_ip = dns_ip.strip()
+  print(dns_ip)
+
+  #make the dns req
+  domain = 'video.columbia.edu'
+  ques = struct.pack('!HHHHHH', 6969, 0x0100, 1, 0, 0, 0)
+  ques += b''.join(len(part).to_bytes(1, 'big') + part.encode() for part in domain.split('.')) + b'\x00'
+  ques += struct.pack('!HH', 1, 1)
+  dnssock = socket(AF_INET, SOCK_DGRAM)
+  dnssock.sendto(ques, (dns_ip, int(sys.argv[6])))
+  response, _ = dnssock.recvfrom(512)  # Buffer size is 512 bytes
+  dnssock.close()
+
+
+  #parse the dns response
+  header = struct.unpack('!HHHHHH', response[:12])
+  ancount = header[3]  # Number of answers
+
+    # Check if there are answers
+  if ancount == 0:
+      return None
+
+    # Skip the question section
+  qname_end = response.index(b'\x00', 12) + 5  # +5 for null byte, QTYPE, and QCLASS
+  answer_start = qname_end
+
+    # Parse the answer section
+  answer = response[answer_start:]
+  rdlength = struct.unpack('!H', answer[10:12])[0]
+  ip = inet_ntoa(answer[12:12 + rdlength])
+  print(ip)
   #server address is server-ip and port is fixed 80
-  serverName = '127.0.0.1' #this will be changed later
-  serverPort = 80
+  serverName = ip  #this will be changed later
+  serverPort = 8080
   # Connect to the server's listening socket
   clientSocket.connect((serverName, serverPort))
   tput_curr = 0
   def receive_client_msg(socket_to_use):
       encodedClientMessage = socket_to_use.recv(2048)
       if not encodedClientMessage:
-          return encodedClientMessage
+          return encodedClientMessage, None
 
       # Decode the recieved binary message into a string
       decodedClientMessage = encodedClientMessage.decode('iso-8859-1')
@@ -33,30 +74,32 @@ def thread_func(connectionSocket, addr, file, alpha):
               decodedClientMessage[-4:] != '\r\n\r\n'):
           print("loop")
           encodednextmsg = socket_to_use.recv(2048)
+          encodedClientMessage += encodednextmsg
           if not encodednextmsg:
               break
           decodednextmsg = encodednextmsg.decode()
           decodedClientMessage += decodednextmsg
-      return decodedClientMessage
-  bitrates = []
+      return decodedClientMessage, encodedClientMessage
+#  bitrates = []
   #keep allowing client and server to send messages to each other
   while 1==1:
       tput_new = 0
       writestr = str(time.time())
       curr_bitrate = 0
 
-      decodedClientMessage = receive_client_msg(connectionSocket)
+      decodedClientMessage, encodedClientMessage = receive_client_msg(connectionSocket)
       if not decodedClientMessage:
           break
+      cleanclientmsg = encodedClientMessage
       if (len(bitrates) == 0 and re.search(r'BigBuckBunny_6s_nolist\.mpd', decodedClientMessage)):
           print('replaced no list')
           decodedClientMessage = re.sub(r'BigBuckBunny_6s_nolist\.mpd', 'BigBuckBunny_6s.mpd', decodedClientMessage)
-      elif (re.search(r'bunny_(\d+)bps', decodedClientMessage)):
+      elif (len(bitrates) != 0 and re.search(r'bunny_(\d+)bps', decodedClientMessage)):
           print('no list done, fetch bitrate')
           print(bitrates)
           curr_bitrate = bitrates[0]
-          for bitrate, index in enumerate(bitrates):
-              if bitrate * 1.5 > tput_curr:
+          for index, bitrate in enumerate(bitrates):
+              if bitrate * 1.5 > tput_curr and index > 0:
                   curr_bitrate = bitrates[index - 1]
                   break
               if index == len(bitrates) - 1:
@@ -87,7 +130,7 @@ def thread_func(connectionSocket, addr, file, alpha):
       firsttime = time.time()
 
       if ((len(bitrates) == 0 and re.search(r'BigBuckBunny_6s', decodedClientMessage))):
-          decodedServerMessage = receive_client_msg(clientSocket)
+          decodedServerMessage, encodedServerMessage = receive_client_msg(clientSocket)
           if not decodedServerMessage:
               break
           bitrate_pattern = r'bandwidth="(\d+)"'
@@ -97,7 +140,9 @@ def thread_func(connectionSocket, addr, file, alpha):
           bitrates.sort()
           print('getting bitrates from xml below this line')
           print(bitrates)
-          connectionSocket.send(decodedServerMessage.encode())
+          #clientSocket.send(cleanclientmsg)
+          #decodedServerMessage, encodedServerMessage = receive_client_msg(clientSocket)
+          connectionSocket.send(encodedServerMessage)
           continue
       # Receive the modified message back from the server
       encodedServerMessage = clientSocket.recv(1)
@@ -142,11 +187,13 @@ def thread_func(connectionSocket, addr, file, alpha):
       secondtime = time.time() 
       for chunk in all_chunks:
           connectionSocket.send(chunk)
-      writestr += " " + str(secondtime - firsttime) + " " + str(sys.argv[4])
+      if filename == "/":
+          continue
+      writestr += " " + str(secondtime - firsttime) + " "
       tput_new = clength / (secondtime - firsttime)
       tput_curr = alpha * tput_new + (1 - alpha) * tput_curr
 
-      writestr += " " + filename + " " + str(clength) + "\n"
+      writestr += str(round(tput_new/1000)) + " " + str(round(tput_curr/1000)) + " " + str(round(curr_bitrate / 1000)) + " " + serverName + " " + filename + "\n"
       file.write(writestr)
       file.flush()
  
