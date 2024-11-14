@@ -6,27 +6,24 @@ import sys
 import struct
 import subprocess
 
-serverSocket = socket(AF_INET, SOCK_DGRAM)
-tree = sys.argv[1].split('/')
-dnsfilename = sys.argv[1] + "/" + tree[-1] + ".dns"
-with open(dnsfilename, 'r', encoding="utf-8") as dnsfile:
-    this_ip = dnsfile.read().strip()
-print(this_ip)
-serverSocket.bind((this_ip, int(sys.argv[3])))
-file = open(sys.argv[2], "w", encoding="utf-8")
-dnsserverfilename = sys.argv[1] + "/" + tree[-1] + ".servers"
-all_ips = []
-with open(dnsserverfilename, 'r', encoding="utf-8") as dnsserverfile:
-    for line in dnsserverfile:
-        all_ips.append(line.strip())
-print(all_ips)
+# Global variables
 PREV = -1
 
-while True:
-    # Recieving message from client
-    encodedClientMessage, clientAddress = serverSocket.recvfrom(2048)
+def read_dns_file(filename):
+    """Read and return the contents of the DNS file."""
+    with open(filename, 'r', encoding="utf-8") as dnsfile:
+        return dnsfile.read().strip()
 
-    print(encodedClientMessage)
+def read_server_ips(filename):
+    """Read and return the list of server IPs from the file."""
+    all_ips = []
+    with open(filename, 'r', encoding="utf-8") as dnsserverfile:
+        for line in dnsserverfile:
+            all_ips.append(line.strip())
+    return all_ips
+
+def parse_dns_query(encodedClientMessage):
+    """Parse the DNS query and return the queried domain name."""
     header = struct.unpack('!HHHHHH', encodedClientMessage[:12])
     qname_end = encodedClientMessage.index(b'\x00', 12)
     qname = encodedClientMessage[12:qname_end]
@@ -36,46 +33,100 @@ while True:
         length = qname[i]
         names.append(qname[i + 1:i + 1 + length].decode())
         i += length + 1
-    FULLNAME = '.'.join(names)
-    if FULLNAME != 'video.columbia.edu':
-        response = struct.pack('!HHHHHH', header[0], 0x8403, 1, 0, 0, 0)
-        response += encodedClientMessage[12:qname_end + 5]
-    else:
-        if sys.argv[4] == 'round-robin':
-            server_ip = all_ips[PREV % len(all_ips)]
-        elif sys.argv[4] == 'lowest-latency':
-            latency = []
-            for ip in all_ips:
-                start_time = time.time()
-                subprocess.check_output(['ping', '-c', '1', ip], timeout=1)
-                latency.append((time.time() - start_time) * 1000)
-                last_lat = latency[-1]
-                log_entry = f"{time.time()} measurement-report {ip} {last_lat}\n"
-                file.write(log_entry)
-                file.flush()
-            while latency[PREV % len(all_ips)] != min(latency):
-                PREV += 1
-            server_ip = all_ips[PREV % len(all_ips)]
-        response = struct.pack('!HHHHHH', header[0], 0x8400, 1, 1, 0, 0)
-        response += encodedClientMessage[12:qname_end +
-                                         5]  # Include original question
+    return '.'.join(names), header, qname_end
 
-        # Answer section
-        aname = struct.pack(
-            '!H', 0xc00c)  # Pointer to domain name in question section
-        atype = struct.pack('!H', 1)  # A record
-        aclass = struct.pack('!H', 1)  # IN class
-        attl = struct.pack('!I', 0)  # TTL of 0 seconds (no caching)
-        adata = inet_aton(server_ip)
-        rdlength = struct.pack('!H', len(adata))
-        answer = aname + atype + aclass + attl + rdlength + adata
-        response += answer
-        writestr = f"{time.time()} request-report {sys.argv[4]} {server_ip}\n"
-        file.write(writestr)
-        file.flush()
+def construct_error_response(header, qname_end, encodedClientMessage):
+    """Construct an error response for non-matching domain names."""
+    response = struct.pack('!HHHHHH', header[0], 0x8403, 1, 0, 0, 0)
+    response += encodedClientMessage[12:qname_end + 5]
+    return response
 
-        PREV += 1
+def measure_latency(ip):
+    """Measure and return the latency to the given IP."""
+    start_time = time.time()
+    subprocess.check_output(['ping', '-c', '1', ip], timeout=1)
+    return (time.time() - start_time) * 1000
 
-    serverSocket.sendto(response, clientAddress)
-serverSocket.close()
-file.close()
+def select_server_ip(all_ips, method):
+    """Select and return a server IP based on the specified method."""
+    global PREV
+    if method == 'round-robin':
+        PREV = (PREV + 1) % len(all_ips)
+        return all_ips[PREV]
+    elif method == 'lowest-latency':
+        latencies = []
+        for ip in all_ips:
+            latency = measure_latency(ip)
+            latencies.append(latency)
+            log_latency(ip, latency)
+        PREV = latencies.index(min(latencies))
+        return all_ips[PREV]
+
+def construct_dns_response(header, qname_end, encodedClientMessage, server_ip):
+    """Construct a DNS response with the selected server IP."""
+    response = struct.pack('!HHHHHH', header[0], 0x8400, 1, 1, 0, 0)
+    response += encodedClientMessage[12:qname_end + 5]  # Include original question
+
+    # Answer section
+    aname = struct.pack('!H', 0xc00c)  # Pointer to domain name in question section
+    atype = struct.pack('!H', 1)  # A record
+    aclass = struct.pack('!H', 1)  # IN class
+    attl = struct.pack('!I', 0)  # TTL of 0 seconds (no caching)
+    adata = inet_aton(server_ip)
+    rdlength = struct.pack('!H', len(adata))
+    answer = aname + atype + aclass + attl + rdlength + adata
+    return response + answer
+
+def log_latency(ip, latency):
+    """Log the latency measurement."""
+    log_entry = f"{time.time()} measurement-report {ip} {latency}\n"
+    file.write(log_entry)
+    file.flush()
+
+def log_request(method, server_ip):
+    """Log the DNS request."""
+    log_entry = f"{time.time()} request-report {method} {server_ip}\n"
+    file.write(log_entry)
+    file.flush()
+
+def main():
+    """Main function to run the DNS server."""
+    global file
+    
+    # Setup
+    tree = sys.argv[1].split('/')
+    dnsfilename = f"{sys.argv[1]}/{tree[-1]}.dns"
+    this_ip = read_dns_file(dnsfilename)
+    print(this_ip)
+
+    serverSocket = socket(AF_INET, SOCK_DGRAM)
+    serverSocket.bind((this_ip, int(sys.argv[3])))
+
+    file = open(sys.argv[2], "w", encoding="utf-8")
+
+    dnsserverfilename = f"{sys.argv[1]}/{tree[-1]}.servers"
+    all_ips = read_server_ips(dnsserverfilename)
+    print(all_ips)
+
+    # Main loop
+    while True:
+        # Receiving message from client
+        encodedClientMessage, clientAddress = serverSocket.recvfrom(2048)
+        print(encodedClientMessage)
+
+        FULLNAME, header, qname_end = parse_dns_query(encodedClientMessage)
+
+        if FULLNAME != 'video.columbia.edu':
+            response = construct_error_response(header, qname_end, encodedClientMessage)
+        else:
+            server_ip = select_server_ip(all_ips, sys.argv[4])
+            response = construct_dns_response(header, qname_end, encodedClientMessage, server_ip)
+            log_request(sys.argv[4], server_ip)
+
+        serverSocket.sendto(response, clientAddress)
+
+    serverSocket.close()
+    file.close()
+
+if __name__ == "__main__":
+    main()
